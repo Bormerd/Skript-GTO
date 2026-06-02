@@ -1,20 +1,14 @@
 from pathlib import Path
 from openpyxl import load_workbook, Workbook
+"""НАСТРОЙКИ"""
 
-# ==========================
-# НАСТРОЙКИ
-# ==========================
-
-MAIN_FILE = r"г. Кострома Политех.xlsx"
+MAIN_FILE = r"г. *.xlsx"
 COLLEGES_FOLDER = r"Колледжи"
 
-OUTPUT_FILE = r"г. Кострома Политех_с_колледжами.xlsx"
-NOT_FOUND_FILE = r"г. Кострома Политех_НЕ_НАЙДЕНО.xlsx"
+OUTPUT_FILE = r"*_с_колледжами.xlsx"
+NOT_FOUND_FILE = r"*_НЕ_НАЙДЕНО.xlsx"
 
-
-# ==========================
-# НОРМАЛИЗАЦИЯ
-# ==========================
+"""НОРМАЛИЗАЦИЯ"""
 
 def normalize_uin(value):
     if value is None:
@@ -38,10 +32,7 @@ def normalize_fio(value):
     value = " ".join(value.split())
     return value
 
-
-# ==========================
-# ПОИСК СТОЛБЦОВ
-# ==========================
+"""ПОИСК СТОЛБЦОВ"""
 
 def find_columns(ws):
     uin_col = None
@@ -69,10 +60,7 @@ def find_columns(ws):
 
     return uin_col, fio_col, header_row
 
-
-# ==========================
-# ИНДЕКСЫ ПРОТОКОЛОВ
-# ==========================
+"""ИНДЕКСЫ ПРОТОКОЛОВ"""
 
 uin_map = {}     # uin -> college
 fio_map = {}     # fio -> list(uin)
@@ -124,10 +112,7 @@ print(f"Файлов обработано: {files_count}")
 print(f"УИН в базе: {len(uin_map)}")
 print("==============================\n")
 
-
-# ==========================
-# ОСНОВНАЯ КНИГА
-# ==========================
+"""ОСНОВНАЯ КНИГА"""
 
 wb = load_workbook(MAIN_FILE)
 
@@ -187,17 +172,11 @@ for sheet in ["Золото", "Серебро", "Бронза"]:
 
         ws.cell(r, college_col, f"{college} ({status})")
 
-
-# ==========================
-# СОХРАНЕНИЕ ОСНОВНОГО ФАЙЛА
-# ==========================
+"""СОХРАНЕНИЕ ОСНОВНОГО ФАЙЛА"""
 
 wb.save(OUTPUT_FILE)
 
-
-# ==========================
-# ОТДЕЛЬНЫЙ ФАЙЛ НЕ НАЙДЕНО
-# ==========================
+"""ОТДЕЛЬНЫЙ ФАЙЛ НЕ НАЙДЕНО"""
 
 report = Workbook()
 ws_rep = report.active
@@ -210,10 +189,8 @@ for row in not_found_rows:
 
 report.save(NOT_FOUND_FILE)
 
+"""КОНСОЛЬНЫЙ ОТЧЁТ"""
 
-# ==========================
-# КОНСОЛЬНЫЙ ОТЧЁТ
-# ==========================
 
 print("\n==============================")
 print("ГОТОВО")
