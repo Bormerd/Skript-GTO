@@ -1,211 +1,148 @@
 from pathlib import Path
 from openpyxl import load_workbook, Workbook
-"""НАСТРОЙКИ"""
+from difflib import SequenceMatcher
+import re
 
-MAIN_FILE = r"г. *.xlsx"
-COLLEGES_FOLDER = r"Колледжи"
-
-OUTPUT_FILE = r"*_с_колледжами.xlsx"
-NOT_FOUND_FILE = r"*_НЕ_НАЙДЕНО.xlsx"
-
-"""НОРМАЛИЗАЦИЯ"""
+BASE = Path(".")
+COLLEGES_FOLDER = BASE / "Колледжи"
 
 def normalize_uin(value):
-    if value is None:
-        return ""
-
-    value = str(value).strip()
-    value = value.replace(" ", "").replace("-", "")
-    value = value.replace("\n", "").replace("\r", "")
-
-    if value.endswith(".0"):
-        value = value[:-2]
-
-    return value
-
+    if value is None: return ""
+    s = str(value).strip().replace(" ", "").replace("\u00a0", "")
+    s = s.replace("-", "").replace("–", "").replace("—", "")
+    s = s.replace("\n", "").replace("\r", "")
+    if s.endswith(".0"): s = s[:-2]
+    return s
 
 def normalize_fio(value):
-    if value is None:
-        return ""
+    if value is None: return ""
+    s = str(value).strip().lower().replace("ё", "е")
+    s = re.sub(r"[.,;:]+", " ", s)
+    return " ".join(s.split())
 
-    value = str(value).strip().lower()
-    value = " ".join(value.split())
-    return value
-
-"""ПОИСК СТОЛБЦОВ"""
+def header_key(value):
+    if value is None: return ""
+    return re.sub(r"[^а-яa-z0-9]", "", str(value).lower().replace("ё", "е"))
 
 def find_columns(ws):
-    uin_col = None
-    fio_col = None
-    header_row = None
-
-    for row in ws.iter_rows(max_row=60):
+    uin_col = fio_col = header_row = None
+    for row in ws.iter_rows(max_row=min(60, ws.max_row)):
+        found = False
         for cell in row:
-
-            if cell.value is None:
-                continue
-
-            text = str(cell.value).lower()
-
-            if "уин" in text:
-                uin_col = cell.column
-                header_row = cell.row
-
-            if "фио" in text:
-                fio_col = cell.column
-                header_row = cell.row
-
-        if uin_col:
-            break
-
+            key = header_key(cell.value)
+            if not key: continue
+            if "уин" in key or ("идентификатор" in key and "участ" in key):
+                uin_col, header_row, found = cell.column, cell.row, True
+            if key in ("фио", "фиоучастника", "фамилияимяотчество") or "фио" in key:
+                fio_col, header_row, found = cell.column, cell.row, True
+        if found and uin_col: break
     return uin_col, fio_col, header_row
 
-"""ИНДЕКСЫ ПРОТОКОЛОВ"""
-
-uin_map = {}     # uin -> college
-fio_map = {}     # fio -> list(uin)
-
-print("Считывание протоколов...\n")
-
-files_count = 0
-
-for folder in Path(COLLEGES_FOLDER).iterdir():
-
-    if not folder.is_dir():
-        continue
-
-    college = folder.name
-    print(f"Колледж: {college}")
-
-    for file in folder.glob("*.xlsx"):
-
+def find_main_file():
+    candidates = []
+    for p in BASE.glob("*.xlsx"):
         try:
-            wb = load_workbook(file, data_only=True)
-            files_count += 1
+            wb = load_workbook(p, read_only=True, data_only=True)
+            sheets = set(wb.sheetnames)
+            wb.close()
+            if {"Золото", "Серебро", "Бронза"}.issubset(sheets):
+                candidates.append(p)
+        except Exception:
+            pass
+    if not candidates:
+        raise FileNotFoundError("Не найден основной XLSX с листами Золото/Серебро/Бронза.")
+    return candidates[0]
 
+def main():
+    main_file = find_main_file()
+    uin_map, fio_map = {}, {}
+    errors = []
+
+    for file in COLLEGES_FOLDER.rglob("*.xlsx"):
+        college = file.parent.name
+        try:
+            wb = load_workbook(file, data_only=True, read_only=True)
             for ws in wb.worksheets:
+                ucol, fcol, hrow = find_columns(ws)
+                if not ucol or not hrow: continue
+                for r in range(hrow + 1, ws.max_row + 1):
+                    u = normalize_uin(ws.cell(r, ucol).value)
+                    f = normalize_fio(ws.cell(r, fcol).value) if fcol else ""
+                    if u: uin_map.setdefault(u, set()).add(college)
+                    if f: fio_map.setdefault(f, []).append((u, college, file.name))
+            wb.close()
+        except Exception as e:
+            errors.append((str(file), str(e)))
 
-                uin_col, fio_col, header_row = find_columns(ws)
+    wb = load_workbook(main_file)
+    total = by_uin = by_fio = not_found = conflicts = 0
+    diagnostics = []
 
-                if not uin_col:
-                    continue
+    for sheet in ("Золото", "Серебро", "Бронза"):
+        if sheet not in wb.sheetnames: continue
+        ws = wb[sheet]
+        ucol, fcol, hrow = find_columns(ws)
+        if not ucol or not hrow: continue
 
-                for r in range(header_row + 1, ws.max_row + 1):
+        college_col = next((c for c in range(1, ws.max_column+1)
+                            if normalize_fio(ws.cell(hrow,c).value) == "колледж"), None)
+        if college_col is None:
+            college_col = ws.max_column + 1
+            ws.cell(hrow, college_col, "Колледж")
 
-                    uin = normalize_uin(ws.cell(r, uin_col).value)
-                    fio = normalize_fio(ws.cell(r, fio_col).value if fio_col else None)
+        for r in range(hrow + 1, ws.max_row + 1):
+            u, f = normalize_uin(ws.cell(r, ucol).value), normalize_fio(ws.cell(r, fcol).value) if fcol else ""
+            if not u and not f: continue
+            total += 1
 
-                    if uin:
-                        uin_map[uin] = college
+            uc = uin_map.get(u, set())
+            fh = fio_map.get(f, [])
+            fcols = sorted(set(x[1] for x in fh if x[1]))
 
-                    if fio:
-                        if fio not in fio_map:
-                            fio_map[fio] = []
-                        fio_map[fio].append(uin)
+            if len(uc) == 1:
+                college, status = next(iter(uc)), "УИН"
+                by_uin += 1
+            elif len(uc) > 1:
+                college, status = "КОНФЛИКТ: несколько колледжей", "КОНФЛИКТ"
+                conflicts += 1
+            elif len(fcols) == 1:
+                college, status = fcols[0], "ФИО"
+                by_fio += 1
+            elif len(fcols) > 1:
+                college, status = "ТРЕБУЕТ ПРОВЕРКИ", "ФИО-КОНФЛИКТ"
+                conflicts += 1
+            else:
+                college, status = "НЕ НАЙДЕН", "НЕ НАЙДЕН"
+                not_found += 1
 
-        except:
-            continue
+            ws.cell(r, college_col, f"{college} ({status})")
+            if status != "УИН":
+                diagnostics.append((sheet, f, u, status))
 
+    out = BASE / f"{main_file.stem}_с_колледжами.xlsx"
+    wb.save(out)
 
-print("\n==============================")
-print(f"Файлов обработано: {files_count}")
-print(f"УИН в базе: {len(uin_map)}")
-print("==============================\n")
+    rep = Workbook()
+    wr = rep.active
+    wr.title = "Диагностика"
+    wr.append(["Лист","ФИО","УИН","Статус"])
+    for row in diagnostics: wr.append(row)
+    ws = rep.create_sheet("Статистика")
+    for row in [
+        ("Основной файл", main_file.name),
+        ("УИН в индексе", len(uin_map)),
+        ("ФИО в индексе", len(fio_map)),
+        ("Всего участников", total),
+        ("По УИН", by_uin),
+        ("По ФИО", by_fio),
+        ("Не найдено", not_found),
+        ("Конфликты", conflicts),
+        ("Ошибки чтения", len(errors)),
+    ]: ws.append(row)
+    rep.save(BASE / f"{main_file.stem}_ДИАГНОСТИКА.xlsx")
 
-"""ОСНОВНАЯ КНИГА"""
+    print(f"Основной файл: {main_file.name}")
+    print(f"Всего: {total}; по УИН: {by_uin}; по ФИО: {by_fio}; не найдено: {not_found}; конфликтов: {conflicts}")
 
-wb = load_workbook(MAIN_FILE)
-
-total = 0
-found_uin = 0
-found_fio = 0
-not_found = 0
-
-not_found_rows = []   # для отдельного файла
-
-for sheet in ["Золото", "Серебро", "Бронза"]:
-
-    ws = wb[sheet]
-
-    uin_col, fio_col, header_row = find_columns(ws)
-
-    college_col = ws.max_column + 1
-    ws.cell(header_row, college_col, "Колледж")
-
-    for r in range(header_row + 1, ws.max_row + 1):
-
-        total += 1
-
-        uin = normalize_uin(ws.cell(r, uin_col).value)
-        fio = normalize_fio(ws.cell(r, fio_col).value if fio_col else None)
-
-        college = None
-        status = "НЕ НАЙДЕН"
-
-        # 1. УИН
-        if uin in uin_map:
-            college = uin_map[uin]
-            status = "УИН"
-            found_uin += 1
-
-        # 2. ФИО
-        elif fio in fio_map:
-
-            uins = fio_map[fio]
-
-            if len(uins) == 1:
-                college = uin_map.get(uins[0])
-                status = "ФИО"
-                found_fio += 1
-
-        if not college:
-            college = "НЕ НАЙДЕН"
-            not_found += 1
-
-            # сохраняем полную строку в отчёт
-            row_data = [
-                sheet,
-                fio,
-                uin
-            ]
-            not_found_rows.append(row_data)
-
-        ws.cell(r, college_col, f"{college} ({status})")
-
-"""СОХРАНЕНИЕ ОСНОВНОГО ФАЙЛА"""
-
-wb.save(OUTPUT_FILE)
-
-"""ОТДЕЛЬНЫЙ ФАЙЛ НЕ НАЙДЕНО"""
-
-report = Workbook()
-ws_rep = report.active
-ws_rep.title = "НЕ НАЙДЕНО"
-
-ws_rep.append(["Лист", "ФИО", "УИН"])
-
-for row in not_found_rows:
-    ws_rep.append(row)
-
-report.save(NOT_FOUND_FILE)
-
-"""КОНСОЛЬНЫЙ ОТЧЁТ"""
-
-
-print("\n==============================")
-print("ГОТОВО")
-print("==============================")
-
-print(f"Всего записей: {total}")
-print(f"По УИН найдено: {found_uin}")
-print(f"По ФИО найдено: {found_fio}")
-print(f"Не найдено: {not_found}")
-
-print("\nПервые 30 НЕ НАЙДЕННЫХ:")
-
-for r in not_found_rows[:30]:
-    print(r)
-
-print("\nФайлы сохранены:")
-print("Основной:", OUTPUT_FILE)
-print("Не найдено:", NOT_FOUND_FILE)
+if __name__ == "__main__":
+    main()
