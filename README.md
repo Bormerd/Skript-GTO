@@ -31,7 +31,7 @@ pip install openpyxl
 
 ```text
 Skript-GTO/
-├── script_универсальный.py
+├── script.py
 ├── README.md
 │
 ├── основной_файл.xlsx
@@ -245,13 +245,13 @@ Skript-GTO/
 ## Запуск
 
 ```bash
-python script_универсальный.py
+python script.py
 ```
 
 Для `python3`:
 
 ```bash
-python3 script_универсальный.py
+python3 script.py
 ```
 
 ---
@@ -292,13 +292,6 @@ python3 script_универсальный.py
 
 ---
 
-## requirements.txt
-
-```text
-openpyxl
-```
-
----
 
 ## Безопасность данных
 
@@ -309,7 +302,6 @@ openpyxl
 ```text
 script_универсальный.py
 README.md
-requirements.txt
 .gitignore
 ```
 
