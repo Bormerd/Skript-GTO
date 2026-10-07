@@ -30,10 +30,9 @@ pip install openpyxl
 ## Структура проекта
 
 ```text
-college-matcher/
+Skript-GTO/
 ├── script_универсальный.py
 ├── README.md
-├── requirements.txt
 │
 ├── основной_файл.xlsx
 │
